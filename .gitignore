@@ -1,0 +1,9 @@
+node_modules/
+.vite/
+dist/
+.codex-backup/
+
+# Local env files
+.env
+.env.*
+!.env.example
