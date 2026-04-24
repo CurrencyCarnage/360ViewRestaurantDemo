@@ -11,6 +11,7 @@ import {
   Mesh,
   MeshBasicMaterial
 } from "three";
+import brandLogo from "./assets/logo.png";
 
 const TABLE_LIBRARY = [
   {
@@ -141,6 +142,15 @@ const contactDetails = {
   hours: "Open daily: 12:00 PM to 11:00 PM"
 };
 
+const INITIAL_SPACES = [
+  {
+    id: "space-main-hall",
+    name: "Main Hall",
+    floorplan: DEFAULT_FLOORPLAN,
+    tables: INITIAL_TABLES.map(normalizeTable)
+  }
+];
+
 const ADMIN_STORAGE_KEY = "demo-restaurant-admin-state-v1";
 
 function clamp(value, min, max) {
@@ -197,6 +207,33 @@ function normalizeTable(table) {
   };
 }
 
+function normalizeSpace(space, index) {
+  const fallbackName = index === 0 ? "Main Hall" : `Space ${index + 1}`;
+  const hasExplicitName = typeof space.name === "string";
+
+  return {
+    id: space.id ?? `space-${index + 1}`,
+    name: hasExplicitName ? space.name : fallbackName,
+    floorplan: {
+      ...DEFAULT_FLOORPLAN,
+      ...(space.floorplan ?? {})
+    },
+    tables: (space.tables ?? []).map(normalizeTable)
+  };
+}
+
+function makeSpace(count) {
+  return normalizeSpace(
+    {
+      id: `space-${Date.now()}-${count}`,
+      name: count === 1 ? "Main Hall" : `Space ${count}`,
+      floorplan: DEFAULT_FLOORPLAN,
+      tables: []
+    },
+    count - 1
+  );
+}
+
 function getSeatMarkers(table) {
   if (table.seats === 2) {
     return [
@@ -241,8 +278,7 @@ function getSeatMarkers(table) {
 
 function loadAdminState() {
   const fallback = {
-    floorplan: DEFAULT_FLOORPLAN,
-    tables: INITIAL_TABLES.map(normalizeTable)
+    spaces: INITIAL_SPACES.map((space, index) => normalizeSpace(space, index))
   };
 
   if (typeof window === "undefined") {
@@ -258,9 +294,24 @@ function loadAdminState() {
 
     const parsed = JSON.parse(raw);
 
+    if (Array.isArray(parsed.spaces) && parsed.spaces.length) {
+      return {
+        spaces: parsed.spaces.map(normalizeSpace)
+      };
+    }
+
     return {
-      floorplan: parsed.floorplan ?? DEFAULT_FLOORPLAN,
-      tables: (parsed.tables ?? INITIAL_TABLES).map(normalizeTable)
+      spaces: [
+        normalizeSpace(
+          {
+            id: "space-main-hall",
+            name: "Main Hall",
+            floorplan: parsed.floorplan ?? DEFAULT_FLOORPLAN,
+            tables: parsed.tables ?? INITIAL_TABLES
+          },
+          0
+        )
+      ]
     };
   } catch {
     return fallback;
@@ -318,7 +369,7 @@ function PanoramaViewer({ src, alt }) {
         return;
       }
 
-      lat = Math.max(-85, Math.min(85, lat));
+      lat = Math.max(-89, Math.min(89, lat));
       const phi = MathUtils.degToRad(90 - lat);
       const theta = MathUtils.degToRad(lon);
 
@@ -334,9 +385,11 @@ function PanoramaViewer({ src, alt }) {
     };
 
     const onPointerDown = (event) => {
+      event.preventDefault();
       isPointerDown = true;
       pointerX = event.clientX;
       pointerY = event.clientY;
+      container.setPointerCapture?.(event.pointerId);
       container.style.cursor = "grabbing";
     };
 
@@ -345,17 +398,22 @@ function PanoramaViewer({ src, alt }) {
         return;
       }
 
+      event.preventDefault();
+
       const deltaX = event.clientX - pointerX;
       const deltaY = event.clientY - pointerY;
+      const width = Math.max(container.clientWidth, 1);
+      const height = Math.max(container.clientHeight, 1);
 
-      lon -= deltaX * 0.12;
-      lat += deltaY * 0.12;
+      lon -= (deltaX / width) * 180;
+      lat += (deltaY / height) * 140;
       pointerX = event.clientX;
       pointerY = event.clientY;
     };
 
-    const onPointerUp = () => {
+    const onPointerUp = (event) => {
       isPointerDown = false;
+      container.releasePointerCapture?.(event.pointerId);
       container.style.cursor = "grab";
     };
 
@@ -371,9 +429,11 @@ function PanoramaViewer({ src, alt }) {
     renderer.domElement.style.display = "block";
     renderer.domElement.style.width = "100%";
     renderer.domElement.style.height = "100%";
+    renderer.domElement.style.touchAction = "none";
     container.innerHTML = "";
     container.appendChild(renderer.domElement);
     container.style.cursor = "grab";
+    container.style.touchAction = "none";
     syncSize();
 
     geometry = new SphereGeometry(500, 72, 48);
@@ -475,6 +535,34 @@ function useHashRoute() {
   return route;
 }
 
+function useMediaQuery(query) {
+  const getMatches = () => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+
+    return window.matchMedia(query).matches;
+  };
+
+  const [matches, setMatches] = useState(getMatches);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    const mediaQueryList = window.matchMedia(query);
+    const onChange = (event) => setMatches(event.matches);
+
+    setMatches(mediaQueryList.matches);
+    mediaQueryList.addEventListener("change", onChange);
+
+    return () => mediaQueryList.removeEventListener("change", onChange);
+  }, [query]);
+
+  return matches;
+}
+
 function FloorplanStage({
   floorplan,
   tables,
@@ -536,7 +624,21 @@ function FloorplanStage({
   );
 }
 
-function HomePage({ floorplan, tables, activeTable, onOpenTable, onCloseTable, onReserveTable }) {
+function HomePage({
+  activeSpace,
+  activeSpaceId,
+  activeTable,
+  isMobile,
+  onCloseTable,
+  onOpenTable,
+  onReserveTable,
+  onSelectSpace,
+  spaces
+}) {
+  if (!activeSpace) {
+    return null;
+  }
+
   const [reservation, setReservation] = useState({
     guestCount: "1",
     time: "",
@@ -596,17 +698,38 @@ function HomePage({ floorplan, tables, activeTable, onOpenTable, onCloseTable, o
     <main className="home-page">
       <section className="forplan-card">
         <div className="section-bar">
-          <div>
-            <p className="eyebrow">Home Focus</p>
-            <h2>Restaurant Forplan</h2>
+          <div className="section-bar__title">
+            <h2>Restaurant Floorplan</h2>
           </div>
           <p className="section-copy">
-            Click a highlighted table to open its 360 view and reservation details.
+            Tap a highlighted table on the floorplan. The 360 view will open in the main panel.
           </p>
         </div>
 
+        {spaces.length > 1 && (
+          <div className="space-tabs" role="tablist" aria-label="Restaurant spaces">
+            {spaces.map((space) => (
+              <button
+                aria-selected={activeSpaceId === space.id}
+                className={activeSpaceId === space.id ? "space-tab space-tab--active" : "space-tab"}
+                key={space.id}
+                onClick={() => onSelectSpace(space.id)}
+                role="tab"
+                type="button"
+              >
+                {space.name}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="forplan-stage-layout">
           <div className={activeTable ? "forplan-room forplan-room--viewer" : "forplan-room"}>
+            {activeTable && (
+              <button className="close-preview close-preview--viewer" onClick={onCloseTable} type="button">
+                X
+              </button>
+            )}
             {activeTable ? (
               <PanoramaViewer
                 alt={`${activeTable.name} 360-degree dining view`}
@@ -615,9 +738,9 @@ function HomePage({ floorplan, tables, activeTable, onOpenTable, onCloseTable, o
             ) : (
               <FloorplanStage
                 activeTableId={activeTable?.id}
-                floorplan={floorplan}
-                onTableClick={(tableId) => onOpenTable(tables.find((table) => table.id === tableId))}
-                tables={tables}
+                floorplan={activeSpace.floorplan}
+                onTableClick={(tableId) => onOpenTable(activeSpace.tables.find((table) => table.id === tableId))}
+                tables={activeSpace.tables}
               />
             )}
           </div>
@@ -625,19 +748,18 @@ function HomePage({ floorplan, tables, activeTable, onOpenTable, onCloseTable, o
           <aside className="preview-panel">
             <div className="preview-copy">
               <div className="preview-header">
-                <p className="eyebrow">{activeTable ? "Selected Table" : "Reservation Info"}</p>
-                {activeTable && (
+                <p className="eyebrow">Reservation Info</p>
+                {activeTable && !isMobile && (
                   <button className="close-preview close-preview--panel" onClick={onCloseTable} type="button">
                     X
                   </button>
                 )}
               </div>
               <h3>{activeTable ? activeTable.name : "Choose a table"}</h3>
-              <p>{activeTable ? `${activeTable.seats} guests` : "Tap a highlighted table on the floorplan."}</p>
               <p>
                 {activeTable
                   ? activeTable.description || "Add a table description from the admin page."
-                  : "The 360 view will open in the main panel."}
+                  : `Choose a table from ${activeSpace.name}. The 360 view will open in the main panel.`}
               </p>
               <p className="preview-hours">
                 {activeTable ? activeTable.hours : "Available hours will appear here."}
@@ -645,7 +767,7 @@ function HomePage({ floorplan, tables, activeTable, onOpenTable, onCloseTable, o
               {activeTable && (
                 <form className="reservation-form" onSubmit={handleReservationSubmit}>
                   <div className="reservation-form__header">
-                    <p className="eyebrow">Reserve Table</p>
+                    <p className="eyebrow">Available Times</p>
                     <span>{activeTable.availableTimes?.length ?? 0} slots left</span>
                   </div>
 
@@ -663,20 +785,23 @@ function HomePage({ floorplan, tables, activeTable, onOpenTable, onCloseTable, o
                     </select>
                   </label>
 
-                  <label className="field field--compact">
-                    <span>Time</span>
-                    <select
-                      onChange={(event) => setReservation((current) => ({ ...current, time: event.target.value }))}
-                      value={reservation.time}
-                    >
-                      <option value="">Select a time</option>
-                      {(activeTable.availableTimes ?? []).map((time) => (
-                        <option key={time} value={time}>
-                          {time}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <div className="time-chip-grid" role="list" aria-label="Available reservation times">
+                    {(activeTable.availableTimes ?? []).map((time) => (
+                      <button
+                        aria-pressed={reservation.time === time}
+                        className={reservation.time === time ? "time-chip time-chip--active" : "time-chip"}
+                        key={time}
+                        onClick={() => setReservation((current) => ({ ...current, time }))}
+                        type="button"
+                      >
+                        {time}
+                      </button>
+                    ))}
+                  </div>
+
+                  {!(activeTable.availableTimes ?? []).length && (
+                    <p className="reservation-feedback">No available times are currently listed for this table.</p>
+                  )}
 
                   <label className="field field--compact">
                     <span>Name</span>
@@ -855,19 +980,30 @@ function ContactPage() {
 }
 
 function AdminPage({
-  floorplan,
-  tables,
-  onFloorplanChange,
+  activeSpace,
+  activeSpaceId,
+  onAddSpace,
   onAddTable,
+  onRemoveSpace,
+  onReset,
+  onSave,
+  onSelectSpace,
+  onUpdateSpace,
   onUpdateTable,
   onRemoveTable,
-  onSave,
-  onReset
+  spaces
 }) {
+  if (!activeSpace) {
+    return null;
+  }
+
   const [placementType, setPlacementType] = useState(TABLE_LIBRARY[0].type);
-  const [selectedTableId, setSelectedTableId] = useState(tables[0]?.id ?? null);
+  const [selectedTableId, setSelectedTableId] = useState(activeSpace?.tables[0]?.id ?? null);
   const [dragState, setDragState] = useState(null);
+  const [spaceValidationMessage, setSpaceValidationMessage] = useState("");
   const stageRef = useRef(null);
+  const tables = activeSpace?.tables ?? [];
+  const floorplan = activeSpace?.floorplan ?? DEFAULT_FLOORPLAN;
 
   const selectedTable = tables.find((table) => table.id === selectedTableId) ?? null;
 
@@ -879,7 +1015,7 @@ function AdminPage({
     if (selectedTableId && !tables.some((table) => table.id === selectedTableId)) {
       setSelectedTableId(tables[0]?.id ?? null);
     }
-  }, [selectedTableId, tables]);
+  }, [selectedTableId, tables, activeSpaceId]);
 
   useEffect(() => {
     if (!dragState) {
@@ -915,10 +1051,28 @@ function AdminPage({
     };
   }, [dragState, floorplan.height, floorplan.width, onUpdateTable, tables]);
 
+  useEffect(() => {
+    if (spaces.every((space) => space.name.trim())) {
+      setSpaceValidationMessage("");
+    }
+  }, [spaces]);
+
+  const validateSpaces = () => {
+    const hasBlankSpaceName = spaces.some((space) => !space.name.trim());
+
+    if (hasBlankSpaceName) {
+      setSpaceValidationMessage("Please fill in the mandatory space name field before adding a new space or saving.");
+      return false;
+    }
+
+    setSpaceValidationMessage("");
+    return true;
+  };
+
   const handleCanvasClick = (event) => {
     const stage = stageRef.current;
 
-    if (!stage) {
+    if (!stage || !activeSpace) {
       return;
     }
 
@@ -969,6 +1123,22 @@ function AdminPage({
     reader.readAsDataURL(file);
   };
 
+  const handleAddSpaceClick = () => {
+    if (!validateSpaces()) {
+      return;
+    }
+
+    onAddSpace();
+  };
+
+  const handleSaveClick = () => {
+    if (!validateSpaces()) {
+      return;
+    }
+
+    onSave();
+  };
+
   return (
     <main className="sub-page">
       <section className="admin-page-card">
@@ -979,25 +1149,72 @@ function AdminPage({
           </div>
           <div className="admin-page__hero-actions">
             <p className="section-copy">
-              Place tables, resize the plan, upload 360 scenes, and manage table copy from one workspace.
+              Create multiple spaces, place tables, resize each plan, and upload 360 scenes from one workspace.
             </p>
             <div className="admin-actions">
               <button className="secondary-button" onClick={onReset} type="button">
                 Reset Draft
               </button>
-              <button className="primary-button" onClick={onSave} type="button">
+              <button className="primary-button" onClick={handleSaveClick} type="button">
                 Save Floorplan
               </button>
             </div>
           </div>
         </div>
 
+        <section className="admin-spaces-panel">
+          <div className="admin-panel__header">
+            <div>
+              <p className="eyebrow">Restaurant Spaces</p>
+              <h3>Manage Areas</h3>
+            </div>
+            <button className="secondary-button" onClick={handleAddSpaceClick} type="button">
+              Add Space
+            </button>
+          </div>
+          <div className="space-tabs space-tabs--admin" role="tablist" aria-label="Admin spaces">
+            {spaces.map((space) => (
+              <button
+                aria-selected={activeSpaceId === space.id}
+                className={activeSpaceId === space.id ? "space-tab space-tab--active" : "space-tab"}
+                key={space.id}
+                onClick={() => onSelectSpace(space.id)}
+                role="tab"
+                type="button"
+              >
+                {space.name.trim() || "Untitled Space"}
+              </button>
+            ))}
+          </div>
+          {spaceValidationMessage && <p className="admin-warning">{spaceValidationMessage}</p>}
+          {activeSpace && (
+            <div className="admin-space-form">
+              <label className="field">
+                <span>Space Name</span>
+                <input
+                  onChange={(event) => onUpdateSpace(activeSpace.id, { name: event.target.value })}
+                  type="text"
+                  value={activeSpace.name}
+                />
+              </label>
+              <button
+                className="danger-button"
+                disabled={spaces.length === 1}
+                onClick={() => onRemoveSpace(activeSpace.id)}
+                type="button"
+              >
+                Remove Space
+              </button>
+            </div>
+          )}
+        </section>
+
         <div className="admin-page__layout">
           <section className="admin-board">
             <div className="admin-board__header">
               <div>
                 <p className="admin-board__label">Live Floorplan</p>
-                <h2>{floorplan.width}px by {floorplan.height}px</h2>
+                <h2>{activeSpace.name.trim() || "Untitled Space"} · {floorplan.width}px by {floorplan.height}px</h2>
               </div>
               <p className="admin-board__hint">Choose a table type, then click the plan to place it. Drag placed tables to reposition them.</p>
             </div>
@@ -1023,21 +1240,35 @@ function AdminPage({
               <div className="admin-grid">
                 <label className="field">
                   <span>Width</span>
-                  <input
-                    min="320"
-                    onChange={(event) => onFloorplanChange({ width: Number(event.target.value) || DEFAULT_FLOORPLAN.width })}
-                    type="number"
-                    value={floorplan.width}
-                  />
+                    <input
+                      min="320"
+                      onChange={(event) =>
+                        onUpdateSpace(activeSpace.id, {
+                          floorplan: {
+                            ...floorplan,
+                            width: Number(event.target.value) || DEFAULT_FLOORPLAN.width
+                          }
+                        })
+                      }
+                      type="number"
+                      value={floorplan.width}
+                    />
                 </label>
                 <label className="field">
                   <span>Height</span>
-                  <input
-                    min="320"
-                    onChange={(event) => onFloorplanChange({ height: Number(event.target.value) || DEFAULT_FLOORPLAN.height })}
-                    type="number"
-                    value={floorplan.height}
-                  />
+                    <input
+                      min="320"
+                      onChange={(event) =>
+                        onUpdateSpace(activeSpace.id, {
+                          floorplan: {
+                            ...floorplan,
+                            height: Number(event.target.value) || DEFAULT_FLOORPLAN.height
+                          }
+                        })
+                      }
+                      type="number"
+                      value={floorplan.height}
+                    />
                 </label>
               </div>
             </section>
@@ -1180,56 +1411,171 @@ function AdminPage({
 
 export default function App() {
   const route = useHashRoute();
+  const isMobile = useMediaQuery("(max-width: 760px)");
   const initialAdminState = loadAdminState();
-  const [floorplan, setFloorplan] = useState(initialAdminState.floorplan);
-  const [tables, setTables] = useState(initialAdminState.tables);
+  const [spaces, setSpaces] = useState(initialAdminState.spaces);
+  const [activeSpaceId, setActiveSpaceId] = useState(initialAdminState.spaces[0]?.id ?? null);
   const [activeTableId, setActiveTableId] = useState(null);
+  const [isNavOpen, setIsNavOpen] = useState(false);
 
-  const persistState = (nextFloorplan, nextTables) => {
+  const persistState = (nextSpaces) => {
     window.localStorage.setItem(
       ADMIN_STORAGE_KEY,
       JSON.stringify({
-        floorplan: nextFloorplan,
-        tables: nextTables.map(normalizeTable)
+        spaces: nextSpaces.map(normalizeSpace)
       })
     );
   };
 
   const handleSaveAdminState = () => {
-    persistState(floorplan, tables);
+    persistState(spaces);
   };
 
   const handleResetAdminState = () => {
-    setFloorplan(DEFAULT_FLOORPLAN);
-    setTables(INITIAL_TABLES.map(normalizeTable));
+    const nextSpaces = INITIAL_SPACES.map((space, index) => normalizeSpace(space, index));
+    setSpaces(nextSpaces);
+    setActiveSpaceId(nextSpaces[0]?.id ?? null);
     setActiveTableId(null);
     window.localStorage.removeItem(ADMIN_STORAGE_KEY);
   };
 
-  const handleReserveTable = (tableId, reservation) => {
-    const nextTables = tables.map((table) => {
-      if (table.id !== tableId) {
-        return table;
+  const updateSpaceCollection = (updater) => {
+    setSpaces((current) => {
+      const nextSpaces = updater(current).map(normalizeSpace);
+      persistState(nextSpaces);
+      return nextSpaces;
+    });
+  };
+
+  const handleSelectSpace = (spaceId) => {
+    setActiveSpaceId(spaceId);
+    setActiveTableId(null);
+  };
+
+  const handleAddSpace = () => {
+    updateSpaceCollection((current) => {
+      const nextSpace = makeSpace(current.length + 1);
+      setActiveSpaceId(nextSpace.id);
+      return [...current, nextSpace];
+    });
+    setActiveTableId(null);
+  };
+
+  const handleRemoveSpace = (spaceId) => {
+    updateSpaceCollection((current) => {
+      if (current.length === 1) {
+        return current;
       }
 
-      const availableTimes = (table.availableTimes ?? []).filter((time) => time !== reservation.time);
+      const filtered = current.filter((space) => space.id !== spaceId);
 
-      return normalizeTable({
-        ...table,
-        availableTimes,
-        lastReservation: {
-          guestCount: reservation.guestCount,
-          time: reservation.time,
-          name: reservation.name,
-          phone: reservation.phone,
-          email: reservation.email,
-          note: reservation.note
-        }
-      });
+      if (activeSpaceId === spaceId) {
+        setActiveSpaceId(filtered[0]?.id ?? null);
+      }
+
+      return filtered;
     });
+    setActiveTableId(null);
+  };
 
-    setTables(nextTables);
-    persistState(floorplan, nextTables);
+  const handleUpdateSpace = (spaceId, patch) => {
+    updateSpaceCollection((current) =>
+      current.map((space) =>
+        space.id === spaceId
+          ? {
+              ...space,
+              ...patch,
+              floorplan: patch.floorplan
+                ? {
+                    ...space.floorplan,
+                    ...patch.floorplan
+                  }
+                : space.floorplan
+            }
+          : space
+      )
+    );
+  };
+
+  const handleAddTable = (table) => {
+    updateSpaceCollection((current) =>
+      current.map((space) =>
+        space.id === activeSpaceId
+          ? {
+              ...space,
+              tables: [...space.tables, normalizeTable(table)]
+            }
+          : space
+      )
+    );
+  };
+
+  const handleUpdateTable = (tableId, patch) => {
+    updateSpaceCollection((current) =>
+      current.map((space) =>
+        space.id === activeSpaceId
+          ? {
+              ...space,
+              tables: space.tables.map((table) =>
+                table.id === tableId
+                  ? normalizeTable({
+                      ...table,
+                      ...patch
+                    })
+                  : table
+              )
+            }
+          : space
+      )
+    );
+  };
+
+  const handleRemoveTable = (tableId) => {
+    updateSpaceCollection((current) =>
+      current.map((space) =>
+        space.id === activeSpaceId
+          ? {
+              ...space,
+              tables: space.tables.filter((table) => table.id !== tableId)
+            }
+          : space
+      )
+    );
+    setActiveTableId((current) => (current === tableId ? null : current));
+  };
+
+  const handleReserveTable = (tableId, reservation) => {
+    updateSpaceCollection((current) =>
+      current.map((space) => {
+        if (space.id !== activeSpaceId) {
+          return space;
+        }
+
+        return {
+          ...space,
+          tables: space.tables.map((table) => {
+            if (table.id !== tableId) {
+              return table;
+            }
+
+            const availableTimes = (table.availableTimes ?? []).filter((time) => time !== reservation.time);
+
+            return normalizeTable({
+              ...table,
+              availableTimes,
+              lastReservation: {
+                guestCount: reservation.guestCount,
+                time: reservation.time,
+                name: reservation.name,
+                phone: reservation.phone,
+                email: reservation.email,
+                note: reservation.note
+              }
+            });
+          })
+        };
+      })
+    );
   };
 
   useEffect(() => {
@@ -1239,22 +1585,38 @@ export default function App() {
   }, [route]);
 
   useEffect(() => {
-    if (activeTableId && !tables.some((table) => table.id === activeTableId)) {
+    setIsNavOpen(false);
+  }, [route, isMobile]);
+
+  useEffect(() => {
+    if (!spaces.some((space) => space.id === activeSpaceId)) {
+      setActiveSpaceId(spaces[0]?.id ?? null);
+    }
+  }, [activeSpaceId, spaces]);
+
+  const activeSpace = spaces.find((space) => space.id === activeSpaceId) ?? spaces[0] ?? null;
+  const activeTables = activeSpace?.tables ?? [];
+
+  useEffect(() => {
+    if (activeTableId && !activeTables.some((table) => table.id === activeTableId)) {
       setActiveTableId(null);
     }
-  }, [activeTableId, tables]);
+  }, [activeTableId, activeTables]);
 
-  const activeTable = tables.find((table) => table.id === activeTableId) ?? null;
+  const activeTable = activeTables.find((table) => table.id === activeTableId) ?? null;
 
   const pageMap = {
     "#/": (
       <HomePage
+        activeSpace={activeSpace}
+        activeSpaceId={activeSpace?.id ?? null}
         activeTable={activeTable}
-        floorplan={floorplan}
+        isMobile={isMobile}
         onOpenTable={(table) => setActiveTableId(table.id)}
         onCloseTable={() => setActiveTableId(null)}
         onReserveTable={handleReserveTable}
-        tables={tables}
+        onSelectSpace={handleSelectSpace}
+        spaces={spaces}
       />
     ),
     "#/menu": (
@@ -1272,30 +1634,18 @@ export default function App() {
     ),
     "#/admin": (
       <AdminPage
-        floorplan={floorplan}
-        onAddTable={(table) => setTables((current) => [...current, table])}
-        onFloorplanChange={(patch) =>
-          setFloorplan((current) => ({
-            ...current,
-            ...patch
-          }))
-        }
-        onRemoveTable={(tableId) => setTables((current) => current.filter((table) => table.id !== tableId))}
+        activeSpace={activeSpace}
+        activeSpaceId={activeSpace?.id ?? null}
+        onAddSpace={handleAddSpace}
+        onAddTable={handleAddTable}
+        onRemoveSpace={handleRemoveSpace}
+        onRemoveTable={handleRemoveTable}
         onReset={handleResetAdminState}
         onSave={handleSaveAdminState}
-        onUpdateTable={(tableId, patch) =>
-          setTables((current) =>
-            current.map((table) =>
-              table.id === tableId
-                ? {
-                    ...table,
-                    ...patch
-                  }
-                : table
-            )
-          )
-        }
-        tables={tables}
+        onSelectSpace={handleSelectSpace}
+        onUpdateSpace={handleUpdateSpace}
+        onUpdateTable={handleUpdateTable}
+        spaces={spaces}
       />
     )
   };
@@ -1305,10 +1655,23 @@ export default function App() {
       <header className="header-shell">
         <nav className="nav">
           <a className="brand" href="#/" onClick={() => setActiveTableId(null)}>
-            <span className="brand__badge">Demo</span>
-            <span className="brand__subcopy">sme logo</span>
+            <img alt="Demo logo" className="brand__logo" src={brandLogo} />
           </a>
-          <div className="nav__links">
+          <a className="nav__title" href="#/" onClick={() => setActiveTableId(null)}>
+            Demo
+          </a>
+          <button
+            aria-expanded={isNavOpen}
+            aria-label="Toggle navigation"
+            className={isNavOpen ? "nav__toggle nav__toggle--open" : "nav__toggle"}
+            onClick={() => setIsNavOpen((current) => !current)}
+            type="button"
+          >
+            <span />
+            <span />
+            <span />
+          </button>
+          <div className={isNavOpen ? "nav__links nav__links--open" : "nav__links"}>
             {navItems.map((item) => (
               <a
                 className={route === item.hash ? "nav-link nav-link--active" : "nav-link"}
