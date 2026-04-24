@@ -712,9 +712,45 @@ code {
   padding: 12px 14px;
 }
 
+.admin-inline-status {
+  margin: 0;
+  color: var(--muted);
+}
+
 .admin-sidebar {
   display: grid;
   gap: 18px;
+}
+
+.admin-menu-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 22px;
+}
+
+.admin-menu-list {
+  display: grid;
+  gap: 16px;
+}
+
+.admin-menu-item {
+  display: grid;
+  gap: 14px;
+  border: 1px solid rgba(225, 193, 110, 0.16);
+  border-radius: 18px;
+  padding: 16px;
+  background: rgba(8, 29, 22, 0.4);
+}
+
+.admin-section-title-input {
+  width: 100%;
+  border: 1px solid rgba(225, 193, 110, 0.22);
+  border-radius: 14px;
+  background: rgba(8, 29, 22, 0.76);
+  color: var(--text);
+  padding: 12px 14px;
+  font-size: 1rem;
+  font-weight: 700;
 }
 
 .space-tabs--admin {
@@ -775,6 +811,12 @@ code {
 .editor-stack {
   display: grid;
   gap: 14px;
+}
+
+.admin-table-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .palette-card {
@@ -1235,6 +1277,7 @@ code {
   .contact-page__grid,
   .contact-meta,
   .admin-page__hero,
+  .admin-menu-grid,
   .admin-page__layout,
   .admin-grid {
     grid-template-columns: 1fr;
@@ -1381,6 +1424,10 @@ code {
   }
 
   .admin-space-form {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-table-actions {
     grid-template-columns: 1fr;
   }
 

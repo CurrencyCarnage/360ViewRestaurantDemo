@@ -108,8 +108,9 @@ const navItems = [
   { id: "contact", label: "Cont", hash: "#/contact" }
 ];
 
-const menuSections = [
+const INITIAL_MENU_SECTIONS = [
   {
+    id: "menu-food",
     title: "Food Menu",
     items: [
       { name: "Forest Mushroom Tart", description: "Crisp pastry, goat cheese, caramelized shallots, herb oil.", price: "$15" },
@@ -121,6 +122,7 @@ const menuSections = [
     ]
   },
   {
+    id: "menu-drinks",
     title: "Drink Menu",
     items: [
       { name: "Citrus Spritz", description: "Sparkling aperitif with orange peel and fresh herbs.", price: "$10" },
@@ -207,6 +209,23 @@ function normalizeTable(table) {
   };
 }
 
+function normalizeMenuItem(item, index) {
+  return {
+    id: item.id ?? `dish-${Date.now()}-${index}`,
+    name: item.name ?? "",
+    description: item.description ?? "",
+    price: item.price ?? ""
+  };
+}
+
+function normalizeMenuSection(section, index) {
+  return {
+    id: section.id ?? `menu-section-${index + 1}`,
+    title: section.title ?? `Section ${index + 1}`,
+    items: (section.items ?? []).map(normalizeMenuItem)
+  };
+}
+
 function normalizeSpace(space, index) {
   const fallbackName = index === 0 ? "Main Hall" : `Space ${index + 1}`;
   const hasExplicitName = typeof space.name === "string";
@@ -278,7 +297,8 @@ function getSeatMarkers(table) {
 
 function loadAdminState() {
   const fallback = {
-    spaces: INITIAL_SPACES.map((space, index) => normalizeSpace(space, index))
+    spaces: INITIAL_SPACES.map((space, index) => normalizeSpace(space, index)),
+    menuSections: INITIAL_MENU_SECTIONS.map((section, index) => normalizeMenuSection(section, index))
   };
 
   if (typeof window === "undefined") {
@@ -296,7 +316,8 @@ function loadAdminState() {
 
     if (Array.isArray(parsed.spaces) && parsed.spaces.length) {
       return {
-        spaces: parsed.spaces.map(normalizeSpace)
+        spaces: parsed.spaces.map(normalizeSpace),
+        menuSections: (parsed.menuSections ?? INITIAL_MENU_SECTIONS).map(normalizeMenuSection)
       };
     }
 
@@ -311,7 +332,8 @@ function loadAdminState() {
           },
           0
         )
-      ]
+      ],
+      menuSections: INITIAL_MENU_SECTIONS.map((section, index) => normalizeMenuSection(section, index))
     };
   } catch {
     return fallback;
@@ -874,7 +896,16 @@ function InfoPage({ title, eyebrow, description }) {
   );
 }
 
-function MenuPage() {
+function makeMenuItem(count) {
+  return normalizeMenuItem({
+    id: `dish-${Date.now()}-${count}`,
+    name: `New Dish ${count}`,
+    description: "",
+    price: "$0"
+  });
+}
+
+function MenuPage({ menuSections }) {
   return (
     <main className="sub-page">
       <section className="menu-page-card">
@@ -895,11 +926,11 @@ function MenuPage() {
 
         <div className="menu-page__grid">
           {menuSections.map((section) => (
-            <section className="menu-section" key={section.title}>
+            <section className="menu-section" key={section.id ?? section.title}>
               <h2>{section.title}</h2>
               <div className="menu-section__list">
                 {section.items.map((item) => (
-                  <article className="menu-item" key={item.name}>
+                  <article className="menu-item" key={item.id ?? item.name}>
                     <div className="menu-item__row">
                       <h3>{item.name}</h3>
                       <span className="menu-item__dots" />
@@ -914,6 +945,108 @@ function MenuPage() {
         </div>
 
         <p className="menu-page__footer">12 Anywhere St., Any City, ST 12345</p>
+      </section>
+    </main>
+  );
+}
+
+function AdminMenuPage({ menuSections, onAddDish, onRemoveDish, onSave, onUpdateDish, onUpdateSectionTitle }) {
+  const [menuSaved, setMenuSaved] = useState(false);
+
+  useEffect(() => {
+    if (!menuSaved) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setMenuSaved(false);
+    }, 1800);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [menuSaved]);
+
+  const handleSaveMenu = () => {
+    onSave();
+    setMenuSaved(true);
+  };
+
+  return (
+    <main className="sub-page">
+      <section className="admin-page-card">
+        <div className="admin-page__hero">
+          <div>
+            <p className="eyebrow">Admin Menu</p>
+            <h1>Menu Control Room</h1>
+          </div>
+          <div className="admin-page__hero-actions">
+            <p className="section-copy">
+              Add dishes, adjust pricing, and edit menu descriptions before they appear on the public menu page.
+            </p>
+            <div className="admin-actions">
+              <button className="primary-button" onClick={handleSaveMenu} type="button">
+                {menuSaved ? "Saved" : "Save Menu"}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="admin-menu-grid">
+          {menuSections.map((section) => (
+            <section className="admin-panel" key={section.id}>
+              <div className="admin-panel__header">
+                <p className="eyebrow">Menu Section</p>
+                <input
+                  className="admin-section-title-input"
+                  onChange={(event) => onUpdateSectionTitle(section.id, event.target.value)}
+                  type="text"
+                  value={section.title}
+                />
+              </div>
+
+              <div className="admin-menu-list">
+                {section.items.map((item, index) => (
+                  <article className="admin-menu-item" key={item.id ?? `${section.id}-${index}`}>
+                    <div className="admin-grid">
+                      <label className="field">
+                        <span>Dish Name</span>
+                        <input
+                          onChange={(event) => onUpdateDish(section.id, item.id, { name: event.target.value })}
+                          type="text"
+                          value={item.name}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Price</span>
+                        <input
+                          onChange={(event) => onUpdateDish(section.id, item.id, { price: event.target.value })}
+                          type="text"
+                          value={item.price}
+                        />
+                      </label>
+                    </div>
+
+                    <label className="field">
+                      <span>Description</span>
+                      <textarea
+                        onChange={(event) => onUpdateDish(section.id, item.id, { description: event.target.value })}
+                        rows="3"
+                        value={item.description}
+                      />
+                    </label>
+
+                    <button className="danger-button" onClick={() => onRemoveDish(section.id, item.id)} type="button">
+                      Remove Dish
+                    </button>
+                  </article>
+                ))}
+              </div>
+
+              <button className="secondary-button" onClick={() => onAddDish(section.id)} type="button">
+                Add Dish
+              </button>
+            </section>
+          ))}
+        </div>
       </section>
     </main>
   );
@@ -1001,6 +1134,9 @@ function AdminPage({
   const [selectedTableId, setSelectedTableId] = useState(activeSpace?.tables[0]?.id ?? null);
   const [dragState, setDragState] = useState(null);
   const [spaceValidationMessage, setSpaceValidationMessage] = useState("");
+  const [floorplanSaved, setFloorplanSaved] = useState(false);
+  const [tableSaved, setTableSaved] = useState(false);
+  const [tableSaveMessage, setTableSaveMessage] = useState("");
   const stageRef = useRef(null);
   const tables = activeSpace?.tables ?? [];
   const floorplan = activeSpace?.floorplan ?? DEFAULT_FLOORPLAN;
@@ -1056,6 +1192,42 @@ function AdminPage({
       setSpaceValidationMessage("");
     }
   }, [spaces]);
+
+  useEffect(() => {
+    if (!tableSaveMessage) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setTableSaveMessage("");
+    }, 2200);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [tableSaveMessage]);
+
+  useEffect(() => {
+    if (!floorplanSaved) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setFloorplanSaved(false);
+    }, 1800);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [floorplanSaved]);
+
+  useEffect(() => {
+    if (!tableSaved) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setTableSaved(false);
+    }, 1800);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [tableSaved]);
 
   const validateSpaces = () => {
     const hasBlankSpaceName = spaces.some((space) => !space.name.trim());
@@ -1137,6 +1309,17 @@ function AdminPage({
     }
 
     onSave();
+    setFloorplanSaved(true);
+  };
+
+  const handleSaveTableClick = () => {
+    if (!validateSpaces()) {
+      return;
+    }
+
+    onSave();
+    setTableSaved(true);
+    setTableSaveMessage("Table changes saved.");
   };
 
   return (
@@ -1156,7 +1339,7 @@ function AdminPage({
                 Reset Draft
               </button>
               <button className="primary-button" onClick={handleSaveClick} type="button">
-                Save Floorplan
+                {floorplanSaved ? "Saved" : "Save Floorplan"}
               </button>
             </div>
           </div>
@@ -1392,9 +1575,16 @@ function AdminPage({
                     <div className="upload-status">360 image attached and ready for the public view.</div>
                   )}
 
-                  <button className="danger-button" onClick={() => onRemoveTable(selectedTable.id)} type="button">
-                    Remove Table
-                  </button>
+                  {tableSaveMessage && <p className="admin-inline-status">{tableSaveMessage}</p>}
+
+                  <div className="admin-table-actions">
+                    <button className="secondary-button" onClick={handleSaveTableClick} type="button">
+                      {tableSaved ? "Saved" : "Save Table"}
+                    </button>
+                    <button className="danger-button" onClick={() => onRemoveTable(selectedTable.id)} type="button">
+                      Remove Table
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <p className="admin-empty">
@@ -1414,26 +1604,30 @@ export default function App() {
   const isMobile = useMediaQuery("(max-width: 760px)");
   const initialAdminState = loadAdminState();
   const [spaces, setSpaces] = useState(initialAdminState.spaces);
+  const [menuSections, setMenuSections] = useState(initialAdminState.menuSections);
   const [activeSpaceId, setActiveSpaceId] = useState(initialAdminState.spaces[0]?.id ?? null);
   const [activeTableId, setActiveTableId] = useState(null);
   const [isNavOpen, setIsNavOpen] = useState(false);
 
-  const persistState = (nextSpaces) => {
+  const persistState = (nextSpaces, nextMenuSections = menuSections) => {
     window.localStorage.setItem(
       ADMIN_STORAGE_KEY,
       JSON.stringify({
-        spaces: nextSpaces.map(normalizeSpace)
+        spaces: nextSpaces.map(normalizeSpace),
+        menuSections: nextMenuSections.map(normalizeMenuSection)
       })
     );
   };
 
   const handleSaveAdminState = () => {
-    persistState(spaces);
+    persistState(spaces, menuSections);
   };
 
   const handleResetAdminState = () => {
     const nextSpaces = INITIAL_SPACES.map((space, index) => normalizeSpace(space, index));
+    const nextMenuSections = INITIAL_MENU_SECTIONS.map((section, index) => normalizeMenuSection(section, index));
     setSpaces(nextSpaces);
+    setMenuSections(nextMenuSections);
     setActiveSpaceId(nextSpaces[0]?.id ?? null);
     setActiveTableId(null);
     window.localStorage.removeItem(ADMIN_STORAGE_KEY);
@@ -1442,8 +1636,16 @@ export default function App() {
   const updateSpaceCollection = (updater) => {
     setSpaces((current) => {
       const nextSpaces = updater(current).map(normalizeSpace);
-      persistState(nextSpaces);
+      persistState(nextSpaces, menuSections);
       return nextSpaces;
+    });
+  };
+
+  const updateMenuCollection = (updater) => {
+    setMenuSections((current) => {
+      const nextMenuSections = updater(current).map(normalizeMenuSection);
+      persistState(spaces, nextMenuSections);
+      return nextMenuSections;
     });
   };
 
@@ -1544,6 +1746,65 @@ export default function App() {
     setActiveTableId((current) => (current === tableId ? null : current));
   };
 
+  const handleAddDish = (sectionId) => {
+    updateMenuCollection((current) =>
+      current.map((section) =>
+        section.id === sectionId
+          ? {
+              ...section,
+              items: [...section.items, makeMenuItem(section.items.length + 1)]
+            }
+          : section
+      )
+    );
+  };
+
+  const handleUpdateDish = (sectionId, dishId, patch) => {
+    updateMenuCollection((current) =>
+      current.map((section) =>
+        section.id === sectionId
+          ? {
+              ...section,
+              items: section.items.map((item) =>
+                item.id === dishId
+                  ? {
+                      ...item,
+                      ...patch
+                    }
+                  : item
+              )
+            }
+          : section
+      )
+    );
+  };
+
+  const handleRemoveDish = (sectionId, dishId) => {
+    updateMenuCollection((current) =>
+      current.map((section) =>
+        section.id === sectionId
+          ? {
+              ...section,
+              items: section.items.filter((item) => item.id !== dishId)
+            }
+          : section
+      )
+    );
+  };
+
+  const handleUpdateSectionTitle = (sectionId, title) => {
+    updateMenuCollection((current) =>
+      current.map((section) =>
+        section.id === sectionId
+          ? {
+              ...section,
+              title
+            }
+          : section
+      )
+    );
+  };
+
   const handleReserveTable = (tableId, reservation) => {
     updateSpaceCollection((current) =>
       current.map((space) => {
@@ -1604,6 +1865,15 @@ export default function App() {
   }, [activeTableId, activeTables]);
 
   const activeTable = activeTables.find((table) => table.id === activeTableId) ?? null;
+  const isAdminRoute = route === "#/admin" || route === "#/admin_menu";
+  const resolvedNavItems = navItems.map((item) =>
+    item.id === "menu" && isAdminRoute
+      ? {
+          ...item,
+          hash: "#/admin_menu"
+        }
+      : item
+  );
 
   const pageMap = {
     "#/": (
@@ -1620,7 +1890,7 @@ export default function App() {
       />
     ),
     "#/menu": (
-      <MenuPage />
+      <MenuPage menuSections={menuSections} />
     ),
     "#/blog": (
       <InfoPage
@@ -1647,6 +1917,16 @@ export default function App() {
         onUpdateTable={handleUpdateTable}
         spaces={spaces}
       />
+    ),
+    "#/admin_menu": (
+      <AdminMenuPage
+        menuSections={menuSections}
+        onAddDish={handleAddDish}
+        onRemoveDish={handleRemoveDish}
+        onSave={handleSaveAdminState}
+        onUpdateDish={handleUpdateDish}
+        onUpdateSectionTitle={handleUpdateSectionTitle}
+      />
     )
   };
 
@@ -1672,9 +1952,13 @@ export default function App() {
             <span />
           </button>
           <div className={isNavOpen ? "nav__links nav__links--open" : "nav__links"}>
-            {navItems.map((item) => (
+            {resolvedNavItems.map((item) => (
               <a
-                className={route === item.hash ? "nav-link nav-link--active" : "nav-link"}
+                className={
+                  route === item.hash || (item.hash === "#/admin_menu" && route === "#/admin")
+                    ? "nav-link nav-link--active"
+                    : "nav-link"
+                }
                 href={item.hash}
                 key={item.id}
                 onClick={item.hash === "#/" ? () => setActiveTableId(null) : undefined}
@@ -1686,10 +1970,10 @@ export default function App() {
         </nav>
       </header>
 
-      {route === "#/admin" && (
+      {isAdminRoute && (
         <section className="admin-route-banner">
           <p className="eyebrow">Admin Route</p>
-          <strong>Admin editor is active at `#/admin`.</strong>
+          <strong>{route === "#/admin_menu" ? "Admin menu editor is active at `#/admin_menu`." : "Admin editor is active at `#/admin`."}</strong>
         </section>
       )}
 
