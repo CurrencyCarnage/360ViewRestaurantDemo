@@ -154,6 +154,7 @@ const INITIAL_SPACES = [
 ];
 
 const ADMIN_STORAGE_KEY = "demo-restaurant-admin-state-v1";
+const SITE_DATA_ENDPOINT = "/api/site-data";
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -226,6 +227,11 @@ function normalizeMenuSection(section, index) {
   };
 }
 
+function parsePriceValue(price = "") {
+  const normalized = Number.parseFloat(String(price).replace(/[^0-9.]/g, ""));
+  return Number.isFinite(normalized) ? normalized : 0;
+}
+
 function normalizeSpace(space, index) {
   const fallbackName = index === 0 ? "Main Hall" : `Space ${index + 1}`;
   const hasExplicitName = typeof space.name === "string";
@@ -295,11 +301,48 @@ function getSeatMarkers(table) {
   ];
 }
 
-function loadAdminState() {
+function getFallbackAdminState() {
+  return {
+    spaces: INITIAL_SPACES.map((space, index) => normalizeSpace(space, index)),
+    menuSections: INITIAL_MENU_SECTIONS.map((section, index) => normalizeMenuSection(section, index))
+  };
+}
+
+function normalizeAdminState(parsed) {
   const fallback = {
     spaces: INITIAL_SPACES.map((space, index) => normalizeSpace(space, index)),
     menuSections: INITIAL_MENU_SECTIONS.map((section, index) => normalizeMenuSection(section, index))
   };
+
+  if (!parsed || typeof parsed !== "object") {
+    return fallback;
+  }
+
+  if (Array.isArray(parsed.spaces) && parsed.spaces.length) {
+    return {
+      spaces: parsed.spaces.map(normalizeSpace),
+      menuSections: (parsed.menuSections ?? INITIAL_MENU_SECTIONS).map(normalizeMenuSection)
+    };
+  }
+
+  return {
+    spaces: [
+      normalizeSpace(
+        {
+          id: "space-main-hall",
+          name: "Main Hall",
+          floorplan: parsed.floorplan ?? DEFAULT_FLOORPLAN,
+          tables: parsed.tables ?? INITIAL_TABLES
+        },
+        0
+      )
+    ],
+    menuSections: INITIAL_MENU_SECTIONS.map((section, index) => normalizeMenuSection(section, index))
+  };
+}
+
+function loadAdminState() {
+  const fallback = getFallbackAdminState();
 
   if (typeof window === "undefined") {
     return fallback;
@@ -312,32 +355,45 @@ function loadAdminState() {
       return fallback;
     }
 
-    const parsed = JSON.parse(raw);
-
-    if (Array.isArray(parsed.spaces) && parsed.spaces.length) {
-      return {
-        spaces: parsed.spaces.map(normalizeSpace),
-        menuSections: (parsed.menuSections ?? INITIAL_MENU_SECTIONS).map(normalizeMenuSection)
-      };
-    }
-
-    return {
-      spaces: [
-        normalizeSpace(
-          {
-            id: "space-main-hall",
-            name: "Main Hall",
-            floorplan: parsed.floorplan ?? DEFAULT_FLOORPLAN,
-            tables: parsed.tables ?? INITIAL_TABLES
-          },
-          0
-        )
-      ],
-      menuSections: INITIAL_MENU_SECTIONS.map((section, index) => normalizeMenuSection(section, index))
-    };
+    return normalizeAdminState(JSON.parse(raw));
   } catch {
     return fallback;
   }
+}
+
+async function fetchRemoteAdminState() {
+  const response = await fetch(SITE_DATA_ENDPOINT, {
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error("Unable to load site data.");
+  }
+
+  const payload = await response.json();
+  return normalizeAdminState(payload?.data);
+}
+
+async function saveRemoteAdminState(nextState) {
+  const response = await fetch(SITE_DATA_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      spaces: nextState.spaces.map(normalizeSpace),
+      menuSections: nextState.menuSections.map(normalizeMenuSection)
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error("Unable to save site data.");
+  }
+
+  const payload = await response.json();
+  return normalizeAdminState(payload?.data);
 }
 
 function PanoramaViewer({ src, alt }) {
@@ -651,6 +707,7 @@ function HomePage({
   activeSpaceId,
   activeTable,
   isMobile,
+  menuSections,
   onCloseTable,
   onOpenTable,
   onReserveTable,
@@ -667,9 +724,11 @@ function HomePage({
     name: "",
     phone: "",
     email: "",
+    selectedMeals: {},
     note: ""
   });
   const [reservationStatus, setReservationStatus] = useState("");
+  const [isPreorderOpen, setIsPreorderOpen] = useState(false);
 
   useEffect(() => {
     if (!activeTable) {
@@ -679,9 +738,11 @@ function HomePage({
         name: "",
         phone: "",
         email: "",
+        selectedMeals: {},
         note: ""
       });
       setReservationStatus("");
+      setIsPreorderOpen(false);
       return;
     }
 
@@ -691,9 +752,11 @@ function HomePage({
       name: "",
       phone: "",
       email: "",
+      selectedMeals: {},
       note: ""
     });
     setReservationStatus("");
+    setIsPreorderOpen(false);
   }, [activeTable]);
 
   const handleReservationSubmit = (event) => {
@@ -712,7 +775,40 @@ function HomePage({
       name: "",
       phone: "",
       email: "",
+      selectedMeals: {},
       note: ""
+    }));
+    setIsPreorderOpen(false);
+  };
+
+  const reservableMenuItems = menuSections.flatMap((section) =>
+    section.items.map((item) => ({
+      ...item,
+      sectionTitle: section.title
+    }))
+  );
+  const selectedMealCount = Object.values(reservation.selectedMeals).reduce((sum, quantity) => sum + quantity, 0);
+  const selectedMealTotal = Object.entries(reservation.selectedMeals).reduce((sum, [mealId, quantity]) => {
+    const meal = reservableMenuItems.find((item) => item.id === mealId);
+    return sum + parsePriceValue(meal?.price) * quantity;
+  }, 0);
+
+  const updateMealQuantity = (mealId, delta) => {
+    setReservation((current) => ({
+      ...current,
+      selectedMeals: (() => {
+        const nextQuantity = (current.selectedMeals[mealId] ?? 0) + delta;
+
+        if (nextQuantity <= 0) {
+          const { [mealId]: _removed, ...rest } = current.selectedMeals;
+          return rest;
+        }
+
+        return {
+          ...current.selectedMeals,
+          [mealId]: nextQuantity
+        };
+      })()
     }));
   };
 
@@ -855,6 +951,79 @@ function HomePage({
                     />
                   </label>
 
+                  <div className="reservation-menu">
+                    <button
+                      aria-expanded={isPreorderOpen}
+                      className={isPreorderOpen ? "reservation-menu__toggle reservation-menu__toggle--open" : "reservation-menu__toggle"}
+                      onClick={() => setIsPreorderOpen((current) => !current)}
+                      type="button"
+                    >
+                      <div>
+                        <p className="eyebrow">Pre-Order Menu</p>
+                        <span>Optional meal selection before arrival</span>
+                      </div>
+                      <strong>{isPreorderOpen ? "Hide" : "Show"}</strong>
+                    </button>
+                    <div className="reservation-total reservation-total--summary">
+                      <span>
+                        {selectedMealCount
+                          ? `${selectedMealCount} portion${selectedMealCount > 1 ? "s" : ""} selected`
+                          : "No meals selected"}
+                      </span>
+                      <strong>${selectedMealTotal.toFixed(2)}</strong>
+                    </div>
+                    {isPreorderOpen && (
+                      <>
+                        <p className="reservation-menu__copy">
+                          Tap any dishes you would like prepared for your arrival. This selection is optional.
+                        </p>
+                        <div className="reservation-menu__grid" role="list" aria-label="Optional meal pre-order">
+                          {reservableMenuItems.map((item) => {
+                            const quantity = reservation.selectedMeals[item.id] ?? 0;
+                            const isSelected = quantity > 0;
+
+                            return (
+                              <article
+                                aria-pressed={isSelected}
+                                className={isSelected ? "menu-choice menu-choice--active" : "menu-choice"}
+                                key={item.id}
+                              >
+                                <div className="menu-choice__topline">
+                                  <strong>{item.name}</strong>
+                                  <span>{item.price}</span>
+                                </div>
+                                <p>{item.description}</p>
+                                <div className="menu-choice__footer">
+                                  <i>{item.sectionTitle}</i>
+                                  <div className="menu-choice__quantity">
+                                    <button
+                                      aria-label={`Remove one portion of ${item.name}`}
+                                      className="menu-choice__stepper"
+                                      disabled={quantity === 0}
+                                      onClick={() => updateMealQuantity(item.id, -1)}
+                                      type="button"
+                                    >
+                                      -
+                                    </button>
+                                    <span>{quantity}</span>
+                                    <button
+                                      aria-label={`Add one portion of ${item.name}`}
+                                      className="menu-choice__stepper"
+                                      onClick={() => updateMealQuantity(item.id, 1)}
+                                      type="button"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                </div>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
+                  </div>
+
                   <label className="field field--compact">
                     <span>Note</span>
                     <textarea
@@ -952,6 +1121,7 @@ function MenuPage({ menuSections }) {
 
 function AdminMenuPage({ menuSections, onAddDish, onRemoveDish, onSave, onUpdateDish, onUpdateSectionTitle }) {
   const [menuSaved, setMenuSaved] = useState(false);
+  const [menuSaveError, setMenuSaveError] = useState("");
 
   useEffect(() => {
     if (!menuSaved) {
@@ -965,9 +1135,14 @@ function AdminMenuPage({ menuSections, onAddDish, onRemoveDish, onSave, onUpdate
     return () => window.clearTimeout(timeoutId);
   }, [menuSaved]);
 
-  const handleSaveMenu = () => {
-    onSave();
-    setMenuSaved(true);
+  const handleSaveMenu = async () => {
+    try {
+      await onSave();
+      setMenuSaved(true);
+      setMenuSaveError("");
+    } catch {
+      setMenuSaveError("Menu save failed. Please check your Redis configuration and try again.");
+    }
   };
 
   return (
@@ -987,6 +1162,7 @@ function AdminMenuPage({ menuSections, onAddDish, onRemoveDish, onSave, onUpdate
                 {menuSaved ? "Saved" : "Save Menu"}
               </button>
             </div>
+            {menuSaveError && <p className="admin-warning">{menuSaveError}</p>}
           </div>
         </div>
 
@@ -1137,6 +1313,7 @@ function AdminPage({
   const [floorplanSaved, setFloorplanSaved] = useState(false);
   const [tableSaved, setTableSaved] = useState(false);
   const [tableSaveMessage, setTableSaveMessage] = useState("");
+  const [saveErrorMessage, setSaveErrorMessage] = useState("");
   const stageRef = useRef(null);
   const tables = activeSpace?.tables ?? [];
   const floorplan = activeSpace?.floorplan ?? DEFAULT_FLOORPLAN;
@@ -1303,23 +1480,33 @@ function AdminPage({
     onAddSpace();
   };
 
-  const handleSaveClick = () => {
+  const handleSaveClick = async () => {
     if (!validateSpaces()) {
       return;
     }
 
-    onSave();
-    setFloorplanSaved(true);
+    try {
+      await onSave();
+      setFloorplanSaved(true);
+      setSaveErrorMessage("");
+    } catch {
+      setSaveErrorMessage("Save failed. Please check your Redis configuration and try again.");
+    }
   };
 
-  const handleSaveTableClick = () => {
+  const handleSaveTableClick = async () => {
     if (!validateSpaces()) {
       return;
     }
 
-    onSave();
-    setTableSaved(true);
-    setTableSaveMessage("Table changes saved.");
+    try {
+      await onSave();
+      setTableSaved(true);
+      setTableSaveMessage("Table changes saved.");
+      setSaveErrorMessage("");
+    } catch {
+      setSaveErrorMessage("Table save failed. Please check your Redis configuration and try again.");
+    }
   };
 
   return (
@@ -1342,6 +1529,7 @@ function AdminPage({
                 {floorplanSaved ? "Saved" : "Save Floorplan"}
               </button>
             </div>
+            {saveErrorMessage && <p className="admin-warning">{saveErrorMessage}</p>}
           </div>
         </div>
 
@@ -1619,8 +1807,42 @@ export default function App() {
     );
   };
 
-  const handleSaveAdminState = () => {
-    persistState(spaces, menuSections);
+  useEffect(() => {
+    let cancelled = false;
+
+    const syncFromRemote = async () => {
+      try {
+        const remoteState = await fetchRemoteAdminState();
+
+        if (cancelled) {
+          return;
+        }
+
+        setSpaces(remoteState.spaces);
+        setMenuSections(remoteState.menuSections);
+        setActiveSpaceId((current) => current ?? remoteState.spaces[0]?.id ?? null);
+        persistState(remoteState.spaces, remoteState.menuSections);
+      } catch {
+        // Keep local draft fallback when remote config is unavailable.
+      }
+    };
+
+    syncFromRemote();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleSaveAdminState = async () => {
+    const nextState = await saveRemoteAdminState({
+      spaces,
+      menuSections
+    });
+    setSpaces(nextState.spaces);
+    setMenuSections(nextState.menuSections);
+    persistState(nextState.spaces, nextState.menuSections);
+    return true;
   };
 
   const handleResetAdminState = () => {
@@ -1630,7 +1852,7 @@ export default function App() {
     setMenuSections(nextMenuSections);
     setActiveSpaceId(nextSpaces[0]?.id ?? null);
     setActiveTableId(null);
-    window.localStorage.removeItem(ADMIN_STORAGE_KEY);
+    persistState(nextSpaces, nextMenuSections);
   };
 
   const updateSpaceCollection = (updater) => {
@@ -1882,6 +2104,7 @@ export default function App() {
         activeSpaceId={activeSpace?.id ?? null}
         activeTable={activeTable}
         isMobile={isMobile}
+        menuSections={menuSections}
         onOpenTable={(table) => setActiveTableId(table.id)}
         onCloseTable={() => setActiveTableId(null)}
         onReserveTable={handleReserveTable}
