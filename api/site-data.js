@@ -6,14 +6,24 @@ function sendJson(response, status, payload) {
 }
 
 function getRedisConfig() {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL || process.env.KV_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
 
   if (!url || !token) {
     throw new Error("Missing Upstash Redis environment variables.");
   }
 
   return { url, token };
+}
+
+async function parseRedisResponse(response, fallbackMessage) {
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(payload?.error || fallbackMessage);
+  }
+
+  return payload;
 }
 
 async function readSiteData() {
@@ -24,11 +34,7 @@ async function readSiteData() {
     }
   });
 
-  if (!response.ok) {
-    throw new Error("Upstash read request failed.");
-  }
-
-  const payload = await response.json();
+  const payload = await parseRedisResponse(response, "Upstash read request failed.");
   return payload.result ? JSON.parse(payload.result) : null;
 }
 
@@ -43,9 +49,7 @@ async function writeSiteData(data) {
     body: JSON.stringify(data)
   });
 
-  if (!response.ok) {
-    throw new Error("Upstash write request failed.");
-  }
+  await parseRedisResponse(response, "Upstash write request failed.");
 
   return data;
 }
