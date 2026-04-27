@@ -368,11 +368,10 @@ async function fetchRemoteAdminState() {
     }
   });
 
-  if (!response.ok) {
-    throw new Error("Unable to load site data.");
-  }
-
   const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload?.error || "Unable to load site data.");
+  }
   return normalizeAdminState(payload?.data);
 }
 
@@ -388,11 +387,10 @@ async function saveRemoteAdminState(nextState) {
     })
   });
 
-  if (!response.ok) {
-    throw new Error("Unable to save site data.");
-  }
-
   const payload = await response.json();
+  if (!response.ok) {
+    throw new Error(payload?.error || "Unable to save site data.");
+  }
   return normalizeAdminState(payload?.data);
 }
 
