@@ -969,6 +969,7 @@ function HomePage({
   const [isPreorderOpen, setIsPreorderOpen] = useState(false);
   const [isFullCalendarOpen, setIsFullCalendarOpen] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(startOfMonth(defaultDateOption.date));
+  const previousTableDateRef = useRef("");
 
   const resolvedSelectedDate = calendarOptions.find((option) => option.key === reservation.date)
     ?? makeCalendarOption(parseDateKey(reservation.date), calendarOptions[0].date);
@@ -986,7 +987,10 @@ function HomePage({
     : null;
 
   useEffect(() => {
+    const nextKey = activeTable ? `${activeTable.id}:${resolvedSelectedDate.key}` : "";
+
     if (!activeTable) {
+      previousTableDateRef.current = "";
       setReservation({
         date: resolvedSelectedDate.key,
         dateLabel: resolvedSelectedDate.fullLabel,
@@ -1003,6 +1007,11 @@ function HomePage({
       return;
     }
 
+    if (previousTableDateRef.current === nextKey) {
+      return;
+    }
+
+    previousTableDateRef.current = nextKey;
     setReservation({
       date: resolvedSelectedDate.key,
       dateLabel: resolvedSelectedDate.fullLabel,
@@ -1016,7 +1025,7 @@ function HomePage({
     });
     setReservationStatus("");
     setIsPreorderOpen(false);
-  }, [activeTable, resolvedActiveTable, resolvedSelectedDate.fullLabel, resolvedSelectedDate.key]);
+  }, [activeTable, resolvedActiveTable?.id, resolvedActiveTable?.dateAvailableTimes, resolvedSelectedDate.fullLabel, resolvedSelectedDate.key]);
 
   useEffect(() => {
     setReservation((current) => {
