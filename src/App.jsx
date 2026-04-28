@@ -198,6 +198,143 @@ function formatAvailableHours(times) {
   return times.length ? `Available today: ${times.join(", ")}` : "No times currently available";
 }
 
+function formatDateKey(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function isSameDateKey(left, right) {
+  return formatDateKey(left) === formatDateKey(right);
+}
+
+function makeCalendarOption(date, today) {
+  const isToday = isSameDateKey(date, today);
+
+  return {
+    key: formatDateKey(date),
+    date,
+    label: isToday
+      ? "Today"
+      : new Intl.DateTimeFormat("en-US", {
+          weekday: "short",
+          day: "numeric"
+        }).format(date),
+    fullLabel: new Intl.DateTimeFormat("en-US", {
+      weekday: "long",
+      month: "long",
+      day: "numeric"
+    }).format(date),
+    shortLabel: new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric"
+    }).format(date),
+    isToday
+  };
+}
+
+function getCalendarOptions(total = 4) {
+  const today = new Date();
+  const base = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+  return Array.from({ length: total }, (_, index) => {
+    const date = new Date(base);
+    date.setDate(base.getDate() + index);
+    return makeCalendarOption(date, base);
+  });
+}
+
+function parseDateKey(dateKey) {
+  return new Date(`${dateKey}T00:00:00`);
+}
+
+function startOfMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+function addMonths(date, amount) {
+  return new Date(date.getFullYear(), date.getMonth() + amount, 1);
+}
+
+function isSameMonth(left, right) {
+  return left.getFullYear() === right.getFullYear() && left.getMonth() === right.getMonth();
+}
+
+function getCalendarMonthDays(viewDate) {
+  const monthStart = startOfMonth(viewDate);
+  const gridStart = new Date(monthStart);
+  gridStart.setDate(monthStart.getDate() - monthStart.getDay());
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(gridStart);
+    date.setDate(gridStart.getDate() + index);
+    return date;
+  });
+}
+
+function getDateAvailabilitySeed(tableId, dateKey) {
+  return `${tableId}-${dateKey}`.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
+}
+
+function getTableAvailabilityForDate(table, dateKey) {
+  if (table.availabilityByDate?.[dateKey]) {
+    return table.availabilityByDate[dateKey];
+  }
+
+  const baseTimes = Array.isArray(table.availableTimes) ? table.availableTimes : [];
+
+  if (!baseTimes.length) {
+    return [];
+  }
+
+  const seed = getDateAvailabilitySeed(table.id, dateKey);
+  const preservedCount = seed % (baseTimes.length + 1);
+
+  if (preservedCount === 0) {
+    return [];
+  }
+
+  const rotation = seed % baseTimes.length;
+  return baseTimes.slice(rotation).concat(baseTimes.slice(0, rotation)).slice(0, preservedCount);
+}
+
+function getAvailabilityStatus(times) {
+  if (!times.length) {
+    return {
+      tone: "unavailable",
+      label: "Unavailable"
+    };
+  }
+
+  if (times.length === 1) {
+    return {
+      tone: "few",
+      label: "Few left"
+    };
+  }
+
+  return {
+    tone: "available",
+    label: "Available"
+  };
+}
+
+function buildAdminReservationMessage(table, reservation) {
+  const preOrderSummary = Object.entries(reservation.selectedMeals ?? {})
+    .map(([mealId, quantity]) => `${mealId}: ${quantity}`)
+    .join(", ");
+
+  return [
+    `Reservation request for ${table.name}`,
+    `Date: ${reservation.dateLabel}`,
+    `Time: ${reservation.time}`,
+    `Guests: ${reservation.guestCount}`,
+    `Name: ${reservation.name}`,
+    `Phone: ${reservation.phone}`,
+    `Email: ${reservation.email || "Not provided"}`,
+    `Pre-order: ${preOrderSummary || "None"}`,
+    `Note: ${reservation.note || "None"}`
+  ].join("\n");
+}
+
 function normalizeTable(table) {
   const availableTimes = Array.isArray(table.availableTimes) && table.availableTimes.length
     ? table.availableTimes
@@ -206,6 +343,7 @@ function normalizeTable(table) {
   return {
     ...table,
     availableTimes,
+    availabilityByDate: table.availabilityByDate ?? {},
     hours: formatAvailableHours(availableTimes)
   };
 }
@@ -644,6 +782,7 @@ function FloorplanStage({
   tables,
   activeTableId,
   onTableClick,
+  getTableAvailability,
   onCanvasClick,
   stageRef,
   adminMode = false,
@@ -657,45 +796,141 @@ function FloorplanStage({
       style={{ aspectRatio: `${floorplan.width} / ${floorplan.height}` }}
     >
       <div className="floorplan-grid" />
-      {tables.map((table) => (
-        <button
-          className={
-            activeTableId === table.id
-              ? `table-node table-node--${table.shape} table-node--active`
-              : `table-node table-node--${table.shape}`
-          }
-          key={table.id}
-          onClick={(event) => {
-            event.stopPropagation();
-            onTableClick?.(table.id);
-          }}
-          onPointerDown={
-            adminMode
-              ? (event) => {
-                  event.stopPropagation();
-                  onTablePointerDown?.(event, table.id);
-                }
-              : undefined
-          }
-          style={{
-            left: `${(table.x / floorplan.width) * 100}%`,
-            top: `${(table.y / floorplan.height) * 100}%`,
-            width: `${(table.width / floorplan.width) * 100}%`,
-            height: `${(table.height / floorplan.height) * 100}%`
-          }}
-          type="button"
-        >
-          <span className="table-node__surface" />
-          {getSeatMarkers(table).map((marker, index) => (
-            <span
-              className="table-node__seat"
-              key={`${table.id}-seat-${index}`}
-              style={{ left: marker.left, top: marker.top }}
-            />
-          ))}
-          {adminMode && <span className="table-node__name">{table.name}</span>}
-        </button>
-      ))}
+      {tables.map((table) => {
+        const availability = getTableAvailability?.(table) ?? {
+          tone: "available",
+          isSelectable: true
+        };
+
+        return (
+          <button
+            aria-disabled={!availability.isSelectable}
+            className={[
+              "table-node",
+              `table-node--${table.shape}`,
+              `table-node--${availability.tone}`,
+              activeTableId === table.id ? "table-node--active" : "",
+              !availability.isSelectable ? "table-node--locked" : ""
+            ].filter(Boolean).join(" ")}
+            key={table.id}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (!availability.isSelectable) {
+                return;
+              }
+              onTableClick?.(table.id);
+            }}
+            onPointerDown={
+              adminMode
+                ? (event) => {
+                    event.stopPropagation();
+                    onTablePointerDown?.(event, table.id);
+                  }
+                : undefined
+            }
+            style={{
+              left: `${(table.x / floorplan.width) * 100}%`,
+              top: `${(table.y / floorplan.height) * 100}%`,
+              width: `${(table.width / floorplan.width) * 100}%`,
+              height: `${(table.height / floorplan.height) * 100}%`
+            }}
+            type="button"
+          >
+            <span className="table-node__surface" />
+            {getSeatMarkers(table).map((marker, index) => (
+              <span
+                className="table-node__seat"
+                key={`${table.id}-seat-${index}`}
+                style={{ left: marker.left, top: marker.top }}
+              />
+            ))}
+            {adminMode && <span className="table-node__name">{table.name}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FullCalendar({
+  selectedDateKey,
+  tables,
+  viewMonth,
+  onChangeMonth,
+  onClose,
+  onSelectDate
+}) {
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const selectedDate = parseDateKey(selectedDateKey);
+  const monthLabel = new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    year: "numeric"
+  }).format(viewMonth);
+  const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const calendarDays = getCalendarMonthDays(viewMonth);
+
+  return (
+    <div className="full-calendar">
+      <div className="full-calendar__header">
+        <div>
+          <p className="eyebrow">Choose A Date</p>
+          <h3>{monthLabel}</h3>
+        </div>
+        <div className="full-calendar__actions">
+          <button className="calendar-nav" onClick={() => onChangeMonth(-1)} type="button">
+            Prev
+          </button>
+          <button className="calendar-nav" onClick={() => onChangeMonth(1)} type="button">
+            Next
+          </button>
+          <button className="close-preview close-preview--calendar" onClick={onClose} type="button">
+            X
+          </button>
+        </div>
+      </div>
+
+      <div className="full-calendar__weekdays" aria-hidden="true">
+        {weekdayLabels.map((label) => (
+          <span key={label}>{label}</span>
+        ))}
+      </div>
+
+      <div className="full-calendar__grid" role="grid" aria-label={`Reservation calendar for ${monthLabel}`}>
+        {calendarDays.map((date) => {
+          const dateKey = formatDateKey(date);
+          const availableCount = tables.filter((table) => getTableAvailabilityForDate(table, dateKey).length > 0).length;
+          const status = getAvailabilityStatus(Array.from({ length: availableCount }));
+          const isCurrentMonth = isSameMonth(date, viewMonth);
+          const isSelected = dateKey === selectedDateKey;
+          const isPastDate = date < todayStart;
+
+          return (
+            <button
+              aria-pressed={isSelected}
+              className={[
+                "calendar-day",
+                `calendar-day--${status.tone}`,
+                isCurrentMonth ? "" : "calendar-day--muted",
+                isSelected ? "calendar-day--active" : ""
+              ].filter(Boolean).join(" ")}
+              disabled={isPastDate}
+              key={dateKey}
+              onClick={() => onSelectDate(makeCalendarOption(date, todayStart))}
+              role="gridcell"
+              type="button"
+            >
+              <span className="calendar-day__number">{date.getDate()}</span>
+              <span className={`calendar-day__dot calendar-day__dot--${status.tone}`} />
+              <small>{status.label}</small>
+            </button>
+          );
+        })}
+      </div>
+
+      <p className="full-calendar__hint">
+        Pick any future date and we will bring you back to the floorplan with matching table availability.
+      </p>
     </div>
   );
 }
@@ -716,7 +951,12 @@ function HomePage({
     return null;
   }
 
+  const calendarOptions = getCalendarOptions();
+  const defaultDateOption = calendarOptions[0];
+
   const [reservation, setReservation] = useState({
+    date: defaultDateOption.key,
+    dateLabel: defaultDateOption.fullLabel,
     guestCount: "1",
     time: "",
     name: "",
@@ -727,10 +967,29 @@ function HomePage({
   });
   const [reservationStatus, setReservationStatus] = useState("");
   const [isPreorderOpen, setIsPreorderOpen] = useState(false);
+  const [isFullCalendarOpen, setIsFullCalendarOpen] = useState(false);
+  const [calendarMonth, setCalendarMonth] = useState(startOfMonth(defaultDateOption.date));
+
+  const resolvedSelectedDate = calendarOptions.find((option) => option.key === reservation.date)
+    ?? makeCalendarOption(parseDateKey(reservation.date), calendarOptions[0].date);
+  const tablesWithAvailability = activeSpace.tables.map((table) => {
+    const availableTimes = getTableAvailabilityForDate(table, resolvedSelectedDate.key);
+    return {
+      ...table,
+      dateAvailableTimes: availableTimes,
+      availabilityStatus: getAvailabilityStatus(availableTimes)
+    };
+  });
+  const availableTables = tablesWithAvailability.filter((table) => table.dateAvailableTimes.length > 0);
+  const resolvedActiveTable = activeTable
+    ? tablesWithAvailability.find((table) => table.id === activeTable.id) ?? null
+    : null;
 
   useEffect(() => {
     if (!activeTable) {
       setReservation({
+        date: resolvedSelectedDate.key,
+        dateLabel: resolvedSelectedDate.fullLabel,
         guestCount: "1",
         time: "",
         name: "",
@@ -745,8 +1004,10 @@ function HomePage({
     }
 
     setReservation({
+      date: resolvedSelectedDate.key,
+      dateLabel: resolvedSelectedDate.fullLabel,
       guestCount: "1",
-      time: activeTable.availableTimes?.[0] ?? "",
+      time: resolvedActiveTable?.dateAvailableTimes?.[0] ?? "",
       name: "",
       phone: "",
       email: "",
@@ -755,18 +1016,42 @@ function HomePage({
     });
     setReservationStatus("");
     setIsPreorderOpen(false);
-  }, [activeTable]);
+  }, [activeTable, resolvedActiveTable, resolvedSelectedDate.fullLabel, resolvedSelectedDate.key]);
+
+  useEffect(() => {
+    setReservation((current) => {
+      if (current.date === resolvedSelectedDate.key && current.dateLabel === resolvedSelectedDate.fullLabel) {
+        return current;
+      }
+
+      const nextTime = resolvedActiveTable?.dateAvailableTimes.includes(current.time)
+        ? current.time
+        : (resolvedActiveTable?.dateAvailableTimes?.[0] ?? "");
+
+      return {
+        ...current,
+        date: resolvedSelectedDate.key,
+        dateLabel: resolvedSelectedDate.fullLabel,
+        time: nextTime
+      };
+    });
+    setReservationStatus("");
+  }, [resolvedActiveTable, resolvedSelectedDate.fullLabel, resolvedSelectedDate.key]);
 
   const handleReservationSubmit = (event) => {
     event.preventDefault();
 
-    if (!activeTable || !reservation.time || !reservation.name.trim() || !reservation.phone.trim()) {
+    if (!resolvedActiveTable || !reservation.time || !reservation.name.trim() || !reservation.phone.trim()) {
       setReservationStatus("Please complete name, phone number, and a time slot.");
       return;
     }
 
-    onReserveTable(activeTable.id, reservation);
-    setReservationStatus(`Reserved ${activeTable.name} for ${reservation.guestCount} guest(s) at ${reservation.time}.`);
+    onReserveTable(resolvedActiveTable.id, {
+      ...reservation,
+      date: resolvedSelectedDate.key,
+      dateLabel: resolvedSelectedDate.fullLabel
+    });
+    setReservationStatus(`Reserved ${resolvedActiveTable.name} for ${reservation.guestCount} guest(s) on ${resolvedSelectedDate.shortLabel} at ${reservation.time}.`);
     setReservation((current) => ({
       ...current,
       time: "",
@@ -822,6 +1107,60 @@ function HomePage({
           </p>
         </div>
 
+        <section className="calendar-panel" aria-label="Select a reservation date">
+          <div className="calendar-panel__header">
+            <p className="eyebrow">Select A Date</p>
+          </div>
+          <div className="calendar-strip">
+            {calendarOptions.map((option) => {
+              const availableCount = tablesWithAvailability.filter((table) => getTableAvailabilityForDate(table, option.key).length > 0).length;
+              const status = getAvailabilityStatus(Array.from({ length: availableCount }));
+              const isSelected = reservation.date === option.key;
+
+              return (
+                <button
+                  aria-pressed={isSelected}
+                  className={isSelected ? `date-card date-card--${status.tone} date-card--active` : `date-card date-card--${status.tone}`}
+                  key={option.key}
+                  onClick={() => {
+                    setReservation((current) => ({
+                      ...current,
+                      date: option.key,
+                      dateLabel: option.fullLabel
+                    }));
+                    setIsFullCalendarOpen(false);
+                    onCloseTable?.();
+                  }}
+                  type="button"
+                >
+                  <strong>{option.label}</strong>
+                  <span className={`date-card__dot date-card__dot--${status.tone}`} />
+                  <small>{status.label}</small>
+                </button>
+              );
+            })}
+
+            {(() => {
+              const isCustomDate = !calendarOptions.some((option) => option.key === reservation.date);
+
+              return (
+                <button
+                  className={isCustomDate ? "date-card date-card--picker date-card--active" : "date-card date-card--picker"}
+                  onClick={() => {
+                    setCalendarMonth(startOfMonth(parseDateKey(reservation.date)));
+                    setIsFullCalendarOpen(true);
+                    onCloseTable?.();
+                  }}
+                  type="button"
+                >
+                  <strong>More</strong>
+                  <small>{isCustomDate ? resolvedSelectedDate.shortLabel : "Open calendar"}</small>
+                </button>
+              );
+            })()}
+          </div>
+        </section>
+
         {spaces.length > 1 && (
           <div className="space-tabs" role="tablist" aria-label="Restaurant spaces">
             {spaces.map((space) => (
@@ -840,7 +1179,15 @@ function HomePage({
         )}
 
         <div className="forplan-stage-layout">
-          <div className={activeTable ? "forplan-room forplan-room--viewer" : "forplan-room"}>
+          <div
+            className={
+              activeTable
+                ? "forplan-room forplan-room--viewer"
+                : isFullCalendarOpen
+                  ? "forplan-room forplan-room--calendar"
+                  : "forplan-room"
+            }
+          >
             {activeTable && (
               <button className="close-preview close-preview--viewer" onClick={onCloseTable} type="button">
                 X
@@ -851,10 +1198,36 @@ function HomePage({
                 alt={`${activeTable.name} 360-degree dining view`}
                 src={activeTable.image}
               />
+            ) : isFullCalendarOpen ? (
+              <FullCalendar
+                onChangeMonth={(delta) => setCalendarMonth((current) => addMonths(current, delta))}
+                onClose={() => setIsFullCalendarOpen(false)}
+                onSelectDate={(nextDate) => {
+                  setReservation((current) => ({
+                    ...current,
+                    date: nextDate.key,
+                    dateLabel: nextDate.fullLabel
+                  }));
+                  setCalendarMonth(startOfMonth(nextDate.date));
+                  setIsFullCalendarOpen(false);
+                  onCloseTable?.();
+                }}
+                selectedDateKey={reservation.date}
+                tables={activeSpace.tables}
+                viewMonth={calendarMonth}
+              />
             ) : (
               <FloorplanStage
                 activeTableId={activeTable?.id}
                 floorplan={activeSpace.floorplan}
+                getTableAvailability={(table) => {
+                  const times = getTableAvailabilityForDate(table, resolvedSelectedDate.key);
+                  const status = getAvailabilityStatus(times);
+                  return {
+                    ...status,
+                    isSelectable: times.length > 0 || activeTable?.id === table.id
+                  };
+                }}
                 onTableClick={(tableId) => onOpenTable(activeSpace.tables.find((table) => table.id === tableId))}
                 tables={activeSpace.tables}
               />
@@ -871,20 +1244,38 @@ function HomePage({
                   </button>
                 )}
               </div>
-              <h3>{activeTable ? activeTable.name : "Choose a table"}</h3>
+              <h3>{resolvedActiveTable ? resolvedActiveTable.name : "Choose a table"}</h3>
               <p>
-                {activeTable
-                  ? activeTable.description || "Add a table description from the admin page."
-                  : `Choose a table from ${activeSpace.name}. The 360 view will open in the main panel.`}
+                {resolvedActiveTable
+                  ? resolvedActiveTable.description || "Add a table description from the admin page."
+                  : `${availableTables.length} table${availableTables.length === 1 ? "" : "s"} available in ${activeSpace.name} for ${resolvedSelectedDate.isToday ? "today" : resolvedSelectedDate.shortLabel}.`}
               </p>
               <p className="preview-hours">
-                {activeTable ? activeTable.hours : "Available hours will appear here."}
+                {resolvedActiveTable
+                  ? (resolvedActiveTable.dateAvailableTimes.length
+                    ? `Available on ${resolvedSelectedDate.shortLabel}: ${resolvedActiveTable.dateAvailableTimes.join(", ")}`
+                    : `No hours left on ${resolvedSelectedDate.shortLabel}.`)
+                  : `Available tables for ${resolvedSelectedDate.isToday ? "Today" : resolvedSelectedDate.shortLabel} will appear here.`}
               </p>
-              {activeTable && (
+              {!resolvedActiveTable && availableTables.length > 0 && (
+                <div className="available-table-list" role="list" aria-label="Available tables for the selected date">
+                  {availableTables.map((table) => (
+                    <button
+                      className="available-table-pill"
+                      key={table.id}
+                      onClick={() => onOpenTable(activeSpace.tables.find((spaceTable) => spaceTable.id === table.id))}
+                      type="button"
+                    >
+                      {table.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {resolvedActiveTable && (
                 <form className="reservation-form" onSubmit={handleReservationSubmit}>
                   <div className="reservation-form__header">
                     <p className="eyebrow">Available Times</p>
-                    <span>{activeTable.availableTimes?.length ?? 0} slots left</span>
+                    <span>{resolvedActiveTable.dateAvailableTimes?.length ?? 0} slots left on {resolvedSelectedDate.shortLabel}</span>
                   </div>
 
                   <label className="field field--compact">
@@ -893,7 +1284,7 @@ function HomePage({
                       onChange={(event) => setReservation((current) => ({ ...current, guestCount: event.target.value }))}
                       value={reservation.guestCount}
                     >
-                      {Array.from({ length: activeTable.seats }, (_, index) => index + 1).map((count) => (
+                      {Array.from({ length: resolvedActiveTable.seats }, (_, index) => index + 1).map((count) => (
                         <option key={count} value={count}>
                           {count} guest{count > 1 ? "s" : ""}
                         </option>
@@ -902,7 +1293,7 @@ function HomePage({
                   </label>
 
                   <div className="time-chip-grid" role="list" aria-label="Available reservation times">
-                    {(activeTable.availableTimes ?? []).map((time) => (
+                    {(resolvedActiveTable.dateAvailableTimes ?? []).map((time) => (
                       <button
                         aria-pressed={reservation.time === time}
                         className={reservation.time === time ? "time-chip time-chip--active" : "time-chip"}
@@ -915,7 +1306,7 @@ function HomePage({
                     ))}
                   </div>
 
-                  {!(activeTable.availableTimes ?? []).length && (
+                  {!(resolvedActiveTable.dateAvailableTimes ?? []).length && (
                     <p className="reservation-feedback">No available times are currently listed for this table.</p>
                   )}
 
@@ -2039,18 +2430,27 @@ export default function App() {
               return table;
             }
 
-            const availableTimes = (table.availableTimes ?? []).filter((time) => time !== reservation.time);
+            const dateKey = reservation.date;
+            const currentDateTimes = getTableAvailabilityForDate(table, dateKey);
+            const nextDateTimes = currentDateTimes.filter((time) => time !== reservation.time);
 
             return normalizeTable({
               ...table,
-              availableTimes,
+              availabilityByDate: {
+                ...(table.availabilityByDate ?? {}),
+                [dateKey]: nextDateTimes
+              },
               lastReservation: {
+                date: reservation.date,
+                dateLabel: reservation.dateLabel,
                 guestCount: reservation.guestCount,
                 time: reservation.time,
                 name: reservation.name,
                 phone: reservation.phone,
                 email: reservation.email,
-                note: reservation.note
+                note: reservation.note,
+                selectedMeals: reservation.selectedMeals,
+                adminMessage: buildAdminReservationMessage(table, reservation)
               }
             });
           })
