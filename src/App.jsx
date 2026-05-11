@@ -985,6 +985,9 @@ function HomePage({
   const resolvedActiveTable = activeTable
     ? tablesWithAvailability.find((table) => table.id === activeTable.id) ?? null
     : null;
+  const substituteTables = resolvedActiveTable
+    ? tablesWithAvailability.filter((table) => table.id !== resolvedActiveTable.id && table.seats === resolvedActiveTable.seats)
+    : [];
 
   useEffect(() => {
     const nextKey = activeTable ? `${activeTable.id}:${resolvedSelectedDate.key}` : "";
@@ -1203,10 +1206,44 @@ function HomePage({
               </button>
             )}
             {activeTable ? (
-              <PanoramaViewer
-                alt={`${activeTable.name} 360-degree dining view`}
-                src={activeTable.image}
-              />
+              <>
+                <PanoramaViewer
+                  alt={`${activeTable.name} 360-degree dining view`}
+                  src={activeTable.image}
+                />
+                <section className="substitute-tables" aria-labelledby="substitute-tables-title">
+                  <div className="substitute-tables__header">
+                    <p className="eyebrow" id="substitute-tables-title">Substitute Tables</p>
+                    <span>{resolvedActiveTable?.seats ?? activeTable.seats} seats</span>
+                  </div>
+                  {substituteTables.length ? (
+                    <div className="substitute-table-grid">
+                      {substituteTables.map((table) => (
+                        <button
+                          className="substitute-table-card"
+                          key={table.id}
+                          onClick={() => onOpenTable(activeSpace.tables.find((spaceTable) => spaceTable.id === table.id))}
+                          type="button"
+                        >
+                          <span className="substitute-table-card__image">
+                            {table.image ? (
+                              <img alt="" src={table.image} />
+                            ) : (
+                              <span>{table.seats}</span>
+                            )}
+                          </span>
+                          <span className="substitute-table-card__copy">
+                            <strong>{table.name}</strong>
+                            <small>{table.dateAvailableTimes.length ? `${table.dateAvailableTimes.length} slots on ${resolvedSelectedDate.shortLabel}` : `No slots on ${resolvedSelectedDate.shortLabel}`}</small>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="substitute-tables__empty">No substitute tables with the same seat count are currently configured.</p>
+                  )}
+                </section>
+              </>
             ) : isFullCalendarOpen ? (
               <FullCalendar
                 onChangeMonth={(delta) => setCalendarMonth((current) => addMonths(current, delta))}
@@ -2233,13 +2270,19 @@ export default function App() {
   }, []);
 
   const handleSaveAdminState = async () => {
-    const nextState = await saveRemoteAdminState({
-      spaces,
-      menuSections
-    });
-    setSpaces(nextState.spaces);
-    setMenuSections(nextState.menuSections);
-    persistState(nextState.spaces, nextState.menuSections);
+    try {
+      const nextState = await saveRemoteAdminState({
+        spaces,
+        menuSections
+      });
+      setSpaces(nextState.spaces);
+      setMenuSections(nextState.menuSections);
+      persistState(nextState.spaces, nextState.menuSections);
+    } catch (error) {
+      console.warn("Remote admin save unavailable; keeping local draft.", error);
+      persistState(spaces, menuSections);
+    }
+
     return true;
   };
 
